@@ -78,6 +78,9 @@
 #define BMP280_MODE_FORCED 1
 #define BMP280_MODE_NORMAL 3
 
+
+#define BMP280_I2C_ADDR 0x76
+
 typedef struct
 {
 	I2C_HandleTypeDef 	*i2c;
