@@ -29,6 +29,9 @@
 #include "usart.h"
 #include "bmp280.h"
 #include "printf.h"
+#include "SSD1306_OLED.h"
+#include "GFX_BW.h"
+#include "fonts/fonts.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,6 +52,8 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
+float Temperature, Pressure;
+
 /* USER CODE END Variables */
 /* Definitions for HeartbeatTask */
 osThreadId_t HeartbeatTaskHandle;
@@ -68,13 +73,23 @@ const osThreadAttr_t BMP280Task_attributes = {
 osThreadId_t OledTaskHandle;
 const osThreadAttr_t OledTask_attributes = {
   .name = "OledTask",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for MutexPrintf */
 osMutexId_t MutexPrintfHandle;
 const osMutexAttr_t MutexPrintf_attributes = {
   .name = "MutexPrintf"
+};
+/* Definitions for MutexI2C */
+osMutexId_t MutexI2CHandle;
+const osMutexAttr_t MutexI2C_attributes = {
+  .name = "MutexI2C"
+};
+/* Definitions for MutexBmpData */
+osMutexId_t MutexBmpDataHandle;
+const osMutexAttr_t MutexBmpData_attributes = {
+  .name = "MutexBmpData"
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -100,6 +115,12 @@ void MX_FREERTOS_Init(void) {
   /* Create the mutex(es) */
   /* creation of MutexPrintf */
   MutexPrintfHandle = osMutexNew(&MutexPrintf_attributes);
+
+  /* creation of MutexI2C */
+  MutexI2CHandle = osMutexNew(&MutexI2C_attributes);
+
+  /* creation of MutexBmpData */
+  MutexBmpDataHandle = osMutexNew(&MutexBmpData_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -170,15 +191,24 @@ void StartBMP280Task(void *argument)
 	BMP280_t Bmp280;
 	float _Temperature, _Pressure;
 
+	osMutexAcquire(MutexI2CHandle, osWaitForever);
 	BMP280_Init(&Bmp280, &hi2c1, BMP280_I2C_ADDR);
+	osMutexRelease(MutexI2CHandle);
   /* Infinite loop */
-  for(;;)
-  {
-	  BMP280_ReadTemperatureAndPressure(&Bmp280, &_Temperature, &_Pressure);
+	for(;;)
+	{
+		osMutexAcquire(MutexI2CHandle, osWaitForever);
+		BMP280_ReadTemperatureAndPressure(&Bmp280, &_Temperature, &_Pressure);
+		osMutexRelease(MutexI2CHandle);
 
-	  printf("Temperature: %.2f, Pressure %.2f\n\r", _Temperature, _Pressure);
+		printf("Temperature: %.2f, Pressure %.2f\n\r", _Temperature, _Pressure);
 
-	  osDelay(200);
+		osMutexAcquire(MutexBmpDataHandle, osWaitForever);
+		Temperature = _Temperature;
+		Pressure = _Pressure;
+		osMutexRelease(MutexBmpDataHandle);
+
+		osDelay(50);
   }
   /* USER CODE END StartBMP280Task */
 }
@@ -193,10 +223,45 @@ void StartBMP280Task(void *argument)
 void StartOledTask(void *argument)
 {
   /* USER CODE BEGIN StartOledTask */
+	uint8_t Message[32];
+
+	float _Temperature, _Pressure;
+
+
+	osMutexAcquire(MutexI2CHandle, osWaitForever);
+	SSD1306_Init(&hi2c1);
+	osMutexRelease(MutexI2CHandle);
+
+	GFX_SetFont(font_8x5);
+
+	SSD1306_Clear(BLACK);
+
+	osMutexAcquire(MutexI2CHandle, osWaitForever);
+	SSD1306_Display();
+	osMutexRelease(MutexI2CHandle);
+
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1000);
+		sprintf((char*) Message, "Weather parameter: ");
+		GFX_DrawString(0, 0, (char*) Message, WHITE, BLACK);
+
+		osMutexAcquire(MutexBmpDataHandle, osWaitForever);
+		_Temperature = Temperature;
+		_Pressure = Pressure;
+		osMutexRelease(MutexBmpDataHandle);
+
+		sprintf((char*) Message, "Temperature: %.2f", _Temperature);
+		GFX_DrawString(0, 10, (char*) Message, WHITE, BLACK);
+
+		sprintf((char*) Message, "Pressure: %.2f", _Pressure);
+		GFX_DrawString(0, 20, (char*) Message, WHITE, BLACK);
+
+
+		osMutexAcquire(MutexI2CHandle, osWaitForever);
+		SSD1306_Display();
+		osMutexRelease(MutexI2CHandle);
+		osDelay(100);
   }
   /* USER CODE END StartOledTask */
 }
