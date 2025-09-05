@@ -133,7 +133,10 @@ const osSemaphoreAttr_t SemaphoreBmpQueue_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-
+float complexABS(float real, float imag)
+{
+	return sqrtf(real*real + imag*imag);
+}
 /* USER CODE END FunctionPrototypes */
 
 void StartHeartbeatTask(void *argument);
@@ -188,7 +191,7 @@ void MX_FREERTOS_Init(void) {
   QueueBmpDataHandle = osMessageQueueNew (8, sizeof(BmpData_t), &QueueBmpData_attributes);
 
   /* creation of QueueFftData */
-  QueueFftDataHandle = osMessageQueueNew (8, sizeof(FftDataa_t), &QueueFftData_attributes);
+  QueueFftDataHandle = osMessageQueueNew (8, sizeof(FftData_t), &QueueFftData_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -344,6 +347,9 @@ void StartFFTTaskTask(void *argument)
 {
   /* USER CODE BEGIN StartFFTTaskTask */
 	arm_rfft_fast_instance_f32 FFTHandler;
+	FftData_t FftData;
+	int FreqPoint;
+	int Offset = 65;
 
 	//
 	// Initialize FFT
@@ -352,10 +358,13 @@ void StartFFTTaskTask(void *argument)
 	uint16_t *AdcMicrophoneBuffer;
 	float *FFTInBuffer;
 	float *FFTOutBuffer;
+	int *Freqs;
 
 	AdcMicrophoneBuffer = pvPortMalloc(FFT_SAMPLES * sizeof(uint16_t));
 	FFTInBuffer = pvPortMalloc(FFT_SAMPLES * sizeof(float));
 	FFTOutBuffer = pvPortMalloc(FFT_SAMPLES * sizeof(float));
+	Freqs = pvPortMalloc((FFT_SAMPLES) * sizeof(int));
+
 
 	HAL_TIM_Base_Start(&htim2);
 	HAL_ADC_Start_DMA(&hadc1, (uint32_t*)AdcMicrophoneBuffer, FFT_SAMPLES);
@@ -364,7 +373,38 @@ void StartFFTTaskTask(void *argument)
   {
 	  osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
 
-  }
+	  for (uint32_t i = 0; i < FFT_SAMPLES; i++)
+	  {
+		  FFTInBuffer[i] = (float)AdcMicrophoneBuffer[i];
+	  }
+
+	  arm_rfft_fast_f32(&FFTHandler, FFTInBuffer, FFTOutBuffer, 0);
+
+	  FreqPoint = 0;
+
+	  for (int i = 1; i < FFT_SAMPLES; i = i+2)
+	  {
+		  Freqs[FreqPoint] = (int)(20*log10f(complexABS(FFTOutBuffer[i], FFTOutBuffer[i+1]))) - Offset;
+
+		  if (Freqs[FreqPoint] < 0)
+		  {
+			  Freqs[FreqPoint] = 0;
+		  }
+	  }
+
+	  FftData.OutFreqArray[0] = (uint8_t)Freqs[1];
+	  FftData.OutFreqArray[1] = (uint8_t)Freqs[2];
+	  FftData.OutFreqArray[2] = (uint8_t)Freqs[3];
+	  FftData.OutFreqArray[3] = (uint8_t)Freqs[6];
+	  FftData.OutFreqArray[4] = (uint8_t)Freqs[12];
+	  FftData.OutFreqArray[5] = (uint8_t)Freqs[23];
+	  FftData.OutFreqArray[6] = (uint8_t)Freqs[51];
+	  FftData.OutFreqArray[7] = (uint8_t)Freqs[104];
+	  FftData.OutFreqArray[8] = (uint8_t)Freqs[207];
+	  FftData.OutFreqArray[9] = (uint8_t)Freqs[334];
+
+	  osMessageQueuePut(QueueFftDataHandle, &FftData, 0, osWaitForever);
+  	 }
   /* USER CODE END StartFFTTaskTask */
 }
 
