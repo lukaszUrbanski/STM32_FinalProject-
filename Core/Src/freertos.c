@@ -368,10 +368,13 @@ void StartFFTTaskTask(void *argument)
 
 	HAL_TIM_Base_Start(&htim2);
 	HAL_ADC_Start_DMA(&hadc1, (uint32_t*)AdcMicrophoneBuffer, FFT_SAMPLES);
+
+	arm_rfft_fast_init_f32(&FFTHandler, FFT_SAMPLES);
+
   /* Infinite loop */
   for(;;)
   {
-	  osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
+	  osThreadFlagsWait(0x0001, osFlagsWaitAll, osWaitForever);
 
 	  for (uint32_t i = 0; i < FFT_SAMPLES; i++)
 	  {
