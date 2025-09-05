@@ -32,6 +32,9 @@
 #include "SSD1306_OLED.h"
 #include "GFX_BW.h"
 #include "fonts/fonts.h"
+#include "arm_math.h"
+#include "tim.h"
+#include "adc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,7 +44,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define FFT_SAMPLES 1024
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,7 +60,11 @@ typedef struct
 	float Pressure;
 }BmpData_t;
 
-//BmpData_t BmpData;
+typedef struct
+{
+	uint8_t OutFreqArray[10];
+}FftData_t;
+
 
 /* USER CODE END Variables */
 /* Definitions for HeartbeatTask */
@@ -81,10 +88,22 @@ const osThreadAttr_t OledTask_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for FFTTask */
+osThreadId_t FFTTaskHandle;
+const osThreadAttr_t FFTTask_attributes = {
+  .name = "FFTTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
 /* Definitions for QueueBmpData */
 osMessageQueueId_t QueueBmpDataHandle;
 const osMessageQueueAttr_t QueueBmpData_attributes = {
   .name = "QueueBmpData"
+};
+/* Definitions for QueueFftData */
+osMessageQueueId_t QueueFftDataHandle;
+const osMessageQueueAttr_t QueueFftData_attributes = {
+  .name = "QueueFftData"
 };
 /* Definitions for TimerBmpData */
 osTimerId_t TimerBmpDataHandle;
@@ -120,6 +139,7 @@ const osSemaphoreAttr_t SemaphoreBmpQueue_attributes = {
 void StartHeartbeatTask(void *argument);
 void StartBMP280Task(void *argument);
 void StartOledTask(void *argument);
+void StartFFTTaskTask(void *argument);
 void TimerBmpDataCallback(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
@@ -167,6 +187,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of QueueBmpData */
   QueueBmpDataHandle = osMessageQueueNew (8, sizeof(BmpData_t), &QueueBmpData_attributes);
 
+  /* creation of QueueFftData */
+  QueueFftDataHandle = osMessageQueueNew (8, sizeof(FftDataa_t), &QueueFftData_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -180,6 +203,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of OledTask */
   OledTaskHandle = osThreadNew(StartOledTask, NULL, &OledTask_attributes);
+
+  /* creation of FFTTask */
+  FFTTaskHandle = osThreadNew(StartFFTTaskTask, NULL, &FFTTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -307,6 +333,41 @@ void StartOledTask(void *argument)
   /* USER CODE END StartOledTask */
 }
 
+/* USER CODE BEGIN Header_StartFFTTaskTask */
+/**
+* @brief Function implementing the FFTTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartFFTTaskTask */
+void StartFFTTaskTask(void *argument)
+{
+  /* USER CODE BEGIN StartFFTTaskTask */
+	arm_rfft_fast_instance_f32 FFTHandler;
+
+	//
+	// Initialize FFT
+	//
+
+	uint16_t *AdcMicrophoneBuffer;
+	float *FFTInBuffer;
+	float *FFTOutBuffer;
+
+	AdcMicrophoneBuffer = pvPortMalloc(FFT_SAMPLES * sizeof(uint16_t));
+	FFTInBuffer = pvPortMalloc(FFT_SAMPLES * sizeof(float));
+	FFTOutBuffer = pvPortMalloc(FFT_SAMPLES * sizeof(float));
+
+	HAL_TIM_Base_Start(&htim2);
+	HAL_ADC_Start_DMA(&hadc1, (uint32_t*)AdcMicrophoneBuffer, FFT_SAMPLES);
+  /* Infinite loop */
+  for(;;)
+  {
+	  osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
+
+  }
+  /* USER CODE END StartFFTTaskTask */
+}
+
 /* TimerBmpDataCallback function */
 void TimerBmpDataCallback(void *argument)
 {
@@ -317,6 +378,15 @@ void TimerBmpDataCallback(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+	if(hadc->Instance == ADC1)
+	{
+		osThreadFlagsSet(FFTTaskHandle, 0x0001);
+	}
+
+}
+
 void _putchar(char Character)
 {
 	osMutexAcquire(MutexPrintfHandle, osWaitForever);
