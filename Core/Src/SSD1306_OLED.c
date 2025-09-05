@@ -8,6 +8,13 @@
 #include "SSD1306_OLED.h"
 #include "string.h"
 
+#ifdef SSD1306_USE_FREERTOS
+#include "cmsis_os.h"
+
+extern osMutexId_t MutexI2CHandle;
+
+#endif
+
 I2C_HandleTypeDef *oled_i2c;
 
 static uint8_t buffer[SSD1306_BUFFER_SIZE];
@@ -62,6 +69,7 @@ void SSD1306_Clear(uint8_t Color)
 
 void SSD1306_Display(void)
 {
+#ifndef SSD1306_USE_FREERTOS
 	SSD1306_Command(SSD1306_PAGEADDR);
 	SSD1306_Command(0);						// Page start address
 	SSD1306_Command(0xFF);					// Page end (not really, but works here)
@@ -70,6 +78,22 @@ void SSD1306_Display(void)
 	SSD1306_Command(SSD1306_LCDWIDTH - 1); 	// Column end
 
 	SSD1306_Data(buffer, SSD1306_BUFFER_SIZE);
+#else
+	for(uint8_t i = 0; i < 8; i++)
+	{
+		osMutexAcquire(MutexI2CHandle, osWaitForever);
+		SSD1306_Command(SSD1306_PAGEADDR);
+		SSD1306_Command(i);						// Page start address
+		SSD1306_Command(i);			// Page end (not really, but works here)
+		SSD1306_Command(SSD1306_COLUMNADDR);
+		SSD1306_Command(0);						// Column start address
+		SSD1306_Command(SSD1306_LCDWIDTH - 1); 	// Column end
+
+		SSD1306_Data(buffer + (i * SSD1306_LCDWIDTH), SSD1306_LCDWIDTH);
+		osMutexRelease(MutexI2CHandle);
+		osThreadYield();
+	}
+#endif
 }
 
 void SSD1306_Init(I2C_HandleTypeDef *i2c)

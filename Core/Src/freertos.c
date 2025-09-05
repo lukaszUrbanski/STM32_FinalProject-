@@ -51,8 +51,13 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+typedef struct
+{
+	float Temperature;
+	float Pressure;
+}BmpData_t;
 
-float Temperature, Pressure;
+//BmpData_t BmpData;
 
 /* USER CODE END Variables */
 /* Definitions for HeartbeatTask */
@@ -67,7 +72,7 @@ osThreadId_t BMP280TaskHandle;
 const osThreadAttr_t BMP280Task_attributes = {
   .name = "BMP280Task",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for OledTask */
 osThreadId_t OledTaskHandle;
@@ -75,6 +80,16 @@ const osThreadAttr_t OledTask_attributes = {
   .name = "OledTask",
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for QueueBmpData */
+osMessageQueueId_t QueueBmpDataHandle;
+const osMessageQueueAttr_t QueueBmpData_attributes = {
+  .name = "QueueBmpData"
+};
+/* Definitions for TimerBmpData */
+osTimerId_t TimerBmpDataHandle;
+const osTimerAttr_t TimerBmpData_attributes = {
+  .name = "TimerBmpData"
 };
 /* Definitions for MutexPrintf */
 osMutexId_t MutexPrintfHandle;
@@ -91,6 +106,11 @@ osMutexId_t MutexBmpDataHandle;
 const osMutexAttr_t MutexBmpData_attributes = {
   .name = "MutexBmpData"
 };
+/* Definitions for SemaphoreBmpQueue */
+osSemaphoreId_t SemaphoreBmpQueueHandle;
+const osSemaphoreAttr_t SemaphoreBmpQueue_attributes = {
+  .name = "SemaphoreBmpQueue"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -100,6 +120,7 @@ const osMutexAttr_t MutexBmpData_attributes = {
 void StartHeartbeatTask(void *argument);
 void StartBMP280Task(void *argument);
 void StartOledTask(void *argument);
+void TimerBmpDataCallback(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -126,13 +147,25 @@ void MX_FREERTOS_Init(void) {
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
+  /* Create the semaphores(s) */
+  /* creation of SemaphoreBmpQueue */
+  SemaphoreBmpQueueHandle = osSemaphoreNew(1, 1, &SemaphoreBmpQueue_attributes);
+
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
 
+  /* Create the timer(s) */
+  /* creation of TimerBmpData */
+  TimerBmpDataHandle = osTimerNew(TimerBmpDataCallback, osTimerPeriodic, NULL, &TimerBmpData_attributes);
+
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
+
+  /* Create the queue(s) */
+  /* creation of QueueBmpData */
+  QueueBmpDataHandle = osMessageQueueNew (8, sizeof(BmpData_t), &QueueBmpData_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -189,26 +222,37 @@ void StartBMP280Task(void *argument)
   /* USER CODE BEGIN StartBMP280Task */
 
 	BMP280_t Bmp280;
-	float _Temperature, _Pressure;
+	BmpData_t _BmpData;
+
+	uint32_t DelayTick = osKernelGetTickCount();
 
 	osMutexAcquire(MutexI2CHandle, osWaitForever);
 	BMP280_Init(&Bmp280, &hi2c1, BMP280_I2C_ADDR);
 	osMutexRelease(MutexI2CHandle);
+
+	osTimerStart(TimerBmpDataHandle, 100);
   /* Infinite loop */
 	for(;;)
 	{
 		osMutexAcquire(MutexI2CHandle, osWaitForever);
-		BMP280_ReadTemperatureAndPressure(&Bmp280, &_Temperature, &_Pressure);
+		BMP280_ReadTemperatureAndPressure(&Bmp280, &_BmpData.Temperature, &_BmpData.Pressure);
 		osMutexRelease(MutexI2CHandle);
 
-		printf("Temperature: %.2f, Pressure %.2f\n\r", _Temperature, _Pressure);
+		if(osOK == osSemaphoreAcquire(SemaphoreBmpQueueHandle, 0))
+		{
+			osMessageQueuePut(QueueBmpDataHandle, &_BmpData, 0, osWaitForever);
+		}
 
-		osMutexAcquire(MutexBmpDataHandle, osWaitForever);
-		Temperature = _Temperature;
-		Pressure = _Pressure;
-		osMutexRelease(MutexBmpDataHandle);
+		printf("Temperature: %.2f, Pressure %.2f\n\r", _BmpData.Temperature, _BmpData.Pressure);
 
-		osDelay(50);
+//		osMutexAcquire(MutexBmpDataHandle, osWaitForever);
+//		BmpData.Temperature = _Temperature;
+//		BmpData.Pressure = _Pressure;
+//		osMutexRelease(MutexBmpDataHandle);
+
+		DelayTick += 10;
+		osDelayUntil(DelayTick);
+
   }
   /* USER CODE END StartBMP280Task */
 }
@@ -224,9 +268,9 @@ void StartOledTask(void *argument)
 {
   /* USER CODE BEGIN StartOledTask */
 	uint8_t Message[32];
+	uint16_t counter = 0;
 
-	float _Temperature, _Pressure;
-
+	BmpData_t _BmpData;
 
 	osMutexAcquire(MutexI2CHandle, osWaitForever);
 	SSD1306_Init(&hi2c1);
@@ -236,34 +280,39 @@ void StartOledTask(void *argument)
 
 	SSD1306_Clear(BLACK);
 
-	osMutexAcquire(MutexI2CHandle, osWaitForever);
 	SSD1306_Display();
-	osMutexRelease(MutexI2CHandle);
 
   /* Infinite loop */
   for(;;)
   {
-		sprintf((char*) Message, "Weather parameter: ");
+		sprintf((char*) Message, "Weather parameter:%04d", counter++);
 		GFX_DrawString(0, 0, (char*) Message, WHITE, BLACK);
 
-		osMutexAcquire(MutexBmpDataHandle, osWaitForever);
-		_Temperature = Temperature;
-		_Pressure = Pressure;
-		osMutexRelease(MutexBmpDataHandle);
+//		osMutexAcquire(MutexBmpDataHandle, osWaitForever);
+//		_Temperature = BmpData.Temperature;
+//		_Pressure = BmpData.Pressure;
+//		osMutexRelease(MutexBmpDataHandle);
+		osMessageQueueGet(QueueBmpDataHandle, &_BmpData, 0, osWaitForever);
 
-		sprintf((char*) Message, "Temperature: %.2f", _Temperature);
+		sprintf((char*) Message, "Temperature: %.2f", _BmpData.Temperature);
 		GFX_DrawString(0, 10, (char*) Message, WHITE, BLACK);
 
-		sprintf((char*) Message, "Pressure: %.2f", _Pressure);
+		sprintf((char*) Message, "Pressure: %.2f", _BmpData.Pressure);
 		GFX_DrawString(0, 20, (char*) Message, WHITE, BLACK);
 
-
-		osMutexAcquire(MutexI2CHandle, osWaitForever);
 		SSD1306_Display();
-		osMutexRelease(MutexI2CHandle);
-		osDelay(100);
+
+		//osDelay(100);
   }
   /* USER CODE END StartOledTask */
+}
+
+/* TimerBmpDataCallback function */
+void TimerBmpDataCallback(void *argument)
+{
+  /* USER CODE BEGIN TimerBmpDataCallback */
+	osSemaphoreRelease(SemaphoreBmpQueueHandle);
+  /* USER CODE END TimerBmpDataCallback */
 }
 
 /* Private application code --------------------------------------------------*/
