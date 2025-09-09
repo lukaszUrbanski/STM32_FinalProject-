@@ -17,6 +17,7 @@
   */
 /* USER CODE END Header */
 
+
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
 #include "task.h"
@@ -86,7 +87,7 @@ osThreadId_t OledTaskHandle;
 const osThreadAttr_t OledTask_attributes = {
   .name = "OledTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* Definitions for FFTTask */
 osThreadId_t FFTTaskHandle;
@@ -265,6 +266,7 @@ void StartBMP280Task(void *argument)
 	{
 		osMutexAcquire(MutexI2CHandle, osWaitForever);
 		BMP280_ReadTemperatureAndPressure(&Bmp280, &_BmpData.Temperature, &_BmpData.Pressure);
+//		_BmpData.Temperature = BMP280_ReadTemperature(&Bmp280);
 		osMutexRelease(MutexI2CHandle);
 
 		if(osOK == osSemaphoreAcquire(SemaphoreBmpQueueHandle, 0))
@@ -297,9 +299,10 @@ void StartOledTask(void *argument)
 {
   /* USER CODE BEGIN StartOledTask */
 	uint8_t Message[32];
-	uint16_t counter = 0;
+	uint8_t counter = 0;
 
 	BmpData_t _BmpData;
+	FftData_t _FftData;
 
 	osMutexAcquire(MutexI2CHandle, osWaitForever);
 	SSD1306_Init(&hi2c1);
@@ -314,20 +317,27 @@ void StartOledTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-		sprintf((char*) Message, "Weather parameter:%04d", counter++);
+	  	SSD1306_Clear(BLACK);
+		sprintf((char*) Message, "Weather parameter:%d", counter++);
 		GFX_DrawString(0, 0, (char*) Message, WHITE, BLACK);
 
 //		osMutexAcquire(MutexBmpDataHandle, osWaitForever);
 //		_Temperature = BmpData.Temperature;
 //		_Pressure = BmpData.Pressure;
 //		osMutexRelease(MutexBmpDataHandle);
-		osMessageQueueGet(QueueBmpDataHandle, &_BmpData, 0, osWaitForever);
+		osMessageQueueGet(QueueBmpDataHandle, &_BmpData, 0, 0);
+		osMessageQueueGet(QueueFftDataHandle, &_FftData, 0, 0);
 
-		sprintf((char*) Message, "Temperature: %.2f", _BmpData.Temperature);
+		sprintf((char*) Message, "Temp: %.2f", _BmpData.Temperature);
 		GFX_DrawString(0, 10, (char*) Message, WHITE, BLACK);
 
-		sprintf((char*) Message, "Pressure: %.2f", _BmpData.Pressure);
+		sprintf((char*) Message, "Pres: %.2f", _BmpData.Pressure);
 		GFX_DrawString(0, 20, (char*) Message, WHITE, BLACK);
+
+		for (uint8_t i = 0; i < 10; i++)
+		{
+			GFX_DrawFillRectangle(10 +(i*11), 64 - _FftData.OutFreqArray[i] , 10, _FftData.OutFreqArray[i], WHITE);
+		}
 
 		SSD1306_Display();
 
@@ -349,7 +359,7 @@ void StartFFTTaskTask(void *argument)
 	arm_rfft_fast_instance_f32 FFTHandler;
 	FftData_t FftData;
 	int FreqPoint;
-	int Offset = 65;
+	int Offset = 45;
 
 	//
 	// Initialize FFT
@@ -393,6 +403,7 @@ void StartFFTTaskTask(void *argument)
 		  {
 			  Freqs[FreqPoint] = 0;
 		  }
+		  FreqPoint++;
 	  }
 
 	  FftData.OutFreqArray[0] = (uint8_t)Freqs[1];
